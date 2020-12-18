@@ -1,6 +1,6 @@
 ---
 title: "Airbnb Review Scores Rating Exploration and Prediction: Empirical Evidence from Hong Kong"
-date: "10/12/2020"
+date: "15/12/2020"
 authour: Minhui Ma
 output: html_document
 ---
@@ -10,26 +10,34 @@ knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
 ```
 
 ## Introduction
-This empirical project aims to analysis the determinants of Airbnb review scores rating and do review scores rating prediction.
+This empirical project aims to analyze the determinants of Airbnb review scores rating and do review scores rating prediction.
 
 This project is available on Github [`minhui-ma/Airbnb-Empirical-Projrect`](https://github.com/minhui-ma/Airbnb-Empirical-Projrect).
-
-## Import data
-A data exploration analysis is firstly carried out to have a initial insight into the three datasets - Listings, Reviews, and Calender.
 
 ```{r}
 # import packages
 library(tidyverse)
-library(geojsonio)
+# library(geojsonio)
 library(ggplot2)
 library(plotly)
 library(BBmisc)
 library(corrplot)
 library(e1071)
-library(skimr)
+# library(skimr)
 library(stargazer)
+library(tm)
+library(tidytext)
+library(DescTools)
+# library(ISLR)
+library(glmnet)
+# library(factoextra)
+library(randomForest)
+library(MASS)
+# set seed
+set.seed(123987)
 ```
 
+## Import data
 ```{r}
 # import data
 listings <- read.csv("listings.csv", header = TRUE, sep = ",")
@@ -41,22 +49,24 @@ listings <- read.csv("listings.csv", header = TRUE, sep = ",")
 # spdf <- geojson_read("neighbourhoods.geojson", what = "sp")
 ```
 
-## Data cleansing
-
+## Data cleaning
 * Replace all empty values with NA 
+* Filter rows with ```review_scores_rating``` in NA
 * Drop all empty columns
-* Filter out rows with ```review_scores_rating``` in NA
 * Drop columns with same value
-* For missing review scores of the 6 dimensions, let them equal to the ```review_scores_rating```
+* For missing review scores of the 6 dimensions, let them equal to ```review_scores_rating```
 * Convert currency values to numeric values
-* Replace date variables, we only need its year
+* Replace date value with its year
 * Convert percentage values to numeric values, and replace missing values with 0
 ```{r}
 listings[listings==''] <- NA
 listings[listings=='N/A'] <- NA
-listings2 <- listings[!sapply(listings,function(x)all(is.na(x)))]
-listings2 <- listings2 %>% filter(review_scores_rating != '')
-listings2 <- listings2 %>% select(where(~length(unique(.)) > 1))
+
+listings2 <- listings %>% filter(review_scores_rating != '')
+
+listings2 <- listings2[!sapply(listings,function(x)all(is.na(x)))]
+
+listings2 <- listings2 %>% dplyr::select(where(~length(unique(.)) > 1))
 
 review_scores <- c('review_scores_accuracy','review_scores_checkin','review_scores_communication',
                    'review_scores_cleanliness','review_scores_value','review_scores_location')
@@ -80,7 +90,6 @@ for (i in var_date){
 
 listings2$host_response_rate <- as.numeric(sub("%","",listings2$host_response_rate))/100
 listings2$host_response_rate[is.na(listings2$host_response_rate)] <- 0
-
 listings2$host_acceptance_rate <- as.numeric(sub("%","",listings2$host_acceptance_rate))/100
 listings2$host_acceptance_rate[is.na(listings2$host_acceptance_rate)] <- 0
 ```
@@ -89,14 +98,17 @@ listings2$host_acceptance_rate[is.na(listings2$host_acceptance_rate)] <- 0
 - ```listing_url```, ```picture_url```, ```host_url```, ```host_thumbnail_url```, ```host_picture_url```
 - ```host_name```, ```name```
 - ```market```, ```state```, ```smart_location```, ```country_code```, ```country```
+- ```host_listings_count```, ```host_total_listings_count```
 - ```host_location```, ```host_neighbourhood```, ```street```, ```city```
 - ```neighbouthood```
 - ```zipcode```, ```square_feet```
 - ```availability_30```, ```availability_60```, ```availability_90```, ```availability_365```
 - ```last_scraped```, ```calendar_last_scraped```
+- ```host_id```
+- ```longitude```,```latitude```
 ```{r}
 listings2 <- listings2 %>% 
-  select(-listing_url, -picture_url, -host_url, -host_thumbnail_url, -host_picture_url,
+  dplyr::select(-listing_url, -picture_url, -host_url, -host_thumbnail_url, -host_picture_url,
          -host_name, -name,
          -market, -state, -smart_location, -country_code, -country,
          -host_location, -host_neighbourhood, -street, -city,
@@ -105,7 +117,8 @@ listings2 <- listings2 %>%
          -zipcode, -square_feet,
          -availability_30, -availability_60, -availability_90, -availability_365,
          -last_scraped, -calendar_last_scraped,
-         -host_id)
+         -host_id,
+         -longitude, -latitude)
 ```
 
 * Replace t with 1 and f with 0: ```host_has_profile_pic```, ```host_identity_verified```, ```host_is_superhost```, ```is_location_exact```, ```instant_bookable```, ```require_guest_profile_picture```, ```require_guest_phone_verification```
@@ -118,7 +131,6 @@ listings2 <- listings2 %>%
          instant_bookable = ifelse(instant_bookable == "t", 1, 0),
          require_guest_profile_picture = ifelse(require_guest_profile_picture == "t", 1, 0),
          require_guest_phone_verification = ifelse(require_guest_phone_verification == "t", 1, 0),)
-
 var <- c('host_has_profile_pic','host_identity_verified','host_is_superhost','is_location_exact',
          'instant_bookable','require_guest_profile_picture','require_guest_phone_verification')
 for (i in var){
@@ -127,43 +139,57 @@ for (i in var){
 }
 ```
 
-* Drop variables: ```summary```,  ```space```, ```description```, ```neighborhood_overview```, ```notes```, ```transit```, ```access```, ```interaction```, ```house_rules```, ```license```, ```host_about```, ```cancellation_policy```
-* Drop variable: ```is_location_exact``` - unimportant as it could be inacurate up to 150 meters http://insideairbnb.com/about.html#disclaimers
-* Drop variable: ```calendar_updated``` - we are not interested in future data that is a subject to daily updates
+* Drop variables: ```summary```,  ```space```, ```description```, ```neighborhood_overview```, ```notes```, ```transit```, ```access```, ```interaction```, ```house_rules```, ```license```, ```host_about```, ```cancellation_policy```, ```host_about```, ```cancellation_policy```
+* Drop variable ```is_location_exact```: unimportant as it could be inacurate up to 150 meters http://insideairbnb.com/about.html#disclaimers
+* Drop variable ```calendar_updated```: we are not interested in future data that is a subject to daily updates
 ```{r}
 listings2 <- listings2 %>% 
-  select(-summary, -space, -description, -neighborhood_overview, -notes, -transit, -access, -interaction, -house_rules, -license,
-         -host_about, -cancellation_policy,
-         -is_location_exact,
-         -calendar_updated)
+  dplyr::select(-summary, -space, -description, -neighborhood_overview, -notes, -transit, -access, -interaction, -house_rules, -license, -host_about, -cancellation_policy, -is_location_exact, -calendar_updated)
 ```
 
-* Replace missing values with 0: ```bathrooms```,  ```beds```, ```security_deposit```, ```cleaning_fee```
-* Replace missing values with the mean value: ```host_since```
+* Replace missing values with 0: ```bathrooms```,  ```beds``` 
+* Replace missing values with mean values: ```host_since```, ```security_deposit```, ```cleaning_fee```
 * Replace missing values with other values: ```monthly_price```, ```weekly_price```, ```host_response_time```
 ```{r}
-var0 <- c('bathrooms','beds','bedrooms','security_deposit','cleaning_fee')
+var0 <- c('bathrooms','beds','bedrooms')
 for (i in var0){
   text <- paste("listings2$",i,"[is.na(listings2$",i,")] <- 0",sep='')
   eval(parse(text= text))
 }
 
+listings2$host_since[is.na(listings2$host_since)] <- floor(mean(listings2$host_since[!is.na(listings2$host_since)]))
+listings2$security_deposit[is.na(listings2$security_deposit)] <- floor(mean(listings2$security_deposit[!is.na(listings2$security_deposit)]))
+listings2$cleaning_fee[is.na(listings2$cleaning_fee)] <- floor(mean(listings2$cleaning_fee[!is.na(listings2$cleaning_fee)]))
+
 listings2$weekly_price[is.na(listings2$weekly_price)] <- 7*listings2$price[is.na(listings2$weekly_price)]
 listings2$monthly_price[is.na(listings2$monthly_price)] <- 30*listings2$price[is.na(listings2$monthly_price)]
-
-listings2$host_since[is.na(listings2$host_since)] <- floor(mean(listings2$host_since[!is.na(listings2$host_since)]))
-
-listings2 <- listings2 %>% select(where(~length(unique(.)) > 1))
 
 listings2$host_response_time[is.na(listings2$host_response_time)] <- 'no response'
 ```
 
-## Exploratory Data Analysis
+Remove observations with 0 review
+```{r}
+listings2 <- listings2 %>% filter(number_of_reviews>0)
+```
 
-correlation
+* Remove outliers
+```{r}
+#find absolute value of z-score for each value in each column
+df <- listings2 %>% dplyr::select(where(is.numeric)) %>% dplyr::select(-id, -host_since, -last_review, -first_review)
+z_scores <- as.data.frame(sapply(df, function(df)(abs(df-mean(df))/sd(df))))
+
+#only keep rows in dataframe with all z-scores less than absolute value of 3 
+listings2 <- listings2[!rowSums(z_scores>3),]
+
+#remove columns with same values
+listings2 <- listings2 %>% dplyr::select(where(~length(unique(.)) > 1))
+```
+
+## Exploratory Data Analysis
+### Scores correlation matrix
 ```{r}
 listings_scores <- listings2 %>% 
-  select(review_scores_rating, 
+  dplyr::select(review_scores_rating, 
          review_scores_accuracy, 
          review_scores_checkin, 
          review_scores_cleanliness, 
@@ -180,25 +206,40 @@ listings_scores <- listings2 %>%
 corrplot(cor(listings_scores), type = "lower", method = "number")
 ```
 
+### CX scores
 ```review_scores_rating``` is an overall score on the AirBnb listing from 0–100. ```reviews_per_month``` is the number of reviews received by a listing per month.
 ```{r}
 ggplot(listings2, aes(x = review_scores_rating)) + 
   geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1)
 ```
+skewness
 ```{r}
-ggplot(listings2, aes(x = reviews_per_month)) + 
-  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1)
+skewness(listings2$review_scores_rating)
 ```
+kurtosis
 ```{r}
-ggplot(listings2, aes(x = number_of_reviews)) + 
-  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=10)
+kurtosis(listings2$review_scores_rating)
 ```
 
-Replace ```review_scores_rating``` with ```cx_scores``` and drop ```review_scores_rating```, ```review_scores_```
+```{r}
+ggplot(listings2, aes(x = reviews_per_month)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=0.1)
+```
+
+skewness
+```{r}
+skewness(listings2$reviews_per_month)
+```
+kurtosis
+```{r}
+kurtosis(listings2$reviews_per_month)
+```
+
+Replace ```review_scores_rating``` with ```cx_scores``` and drop ```review_scores_rating```, ```review_scores_accuracy```, ```review_scores_checkin```, ```review_scores_cleanliness```, ```review_scores_communication```,```review_scores_location```, ```review_scores_value```, ```reviews_per_month```, ```number_of_reviews```, ```number_of_reviews_ltmh```, 
 ```{r}
 listings3 <- listings2 %>% 
-  mutate(cx_scores = normalize(review_scores_rating, method = "range", range = c(0,1))*reviews_per_month) %>% 
-  select(-review_scores_rating, 
+  mutate(cx_scores = normalize(review_scores_rating, method  = "range", range = c(0,1))*reviews_per_month) %>% 
+  dplyr::select(-review_scores_rating, 
          -review_scores_accuracy, 
          -review_scores_checkin, 
          -review_scores_cleanliness, 
@@ -211,15 +252,15 @@ listings3 <- listings2 %>%
 ```
 ```{r}
 ggplot(listings3, aes(x = cx_scores)) + 
-  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1)
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=0.1)
 ```
 
+### Character variables
 * property_type
 ```{r}
 ggplot(data = listings3, aes(x = as.character(property_type), y = cx_scores, color = as.character(property_type))) +
   geom_boxplot(outlier.shape = NA) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1),legend.position = "none")+
-  coord_cartesian(ylim = c(0, 5)) +
   xlab("property_type")
 ```
 
@@ -237,7 +278,7 @@ ggplot(data = listings3, aes(x = as.character(room_type), y = cx_scores, color =
 ggplot(data = listings3, aes(x = as.character(bed_type), y = cx_scores, color = as.character(bed_type))) +
   geom_boxplot(outlier.shape = NA) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1),legend.title = element_blank())+
-  coord_cartesian(ylim = c(0, 3)) +
+  coord_cartesian(ylim = c(0, 2)) +
   xlab("bed_type")
 ```
 
@@ -246,7 +287,7 @@ ggplot(data = listings3, aes(x = as.character(bed_type), y = cx_scores, color = 
 ggplot(data = listings3, aes(x = as.character(neighbourhood_cleansed), y = cx_scores, color = as.character(neighbourhood_cleansed))) +
   geom_boxplot(outlier.shape = NA) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1),legend.title = element_blank())+
-  coord_cartesian(ylim = c(0, 4)) +
+  coord_cartesian(ylim = c(0, 3)) +
   xlab("neighbourhood_cleansed")
 ```
 
@@ -255,61 +296,391 @@ ggplot(data = listings3, aes(x = as.character(neighbourhood_cleansed), y = cx_sc
 ggplot(data = listings3, aes(x = as.character(host_response_time), y = cx_scores, color = as.character(host_response_time))) +
   geom_boxplot(outlier.shape = NA) +
   theme(axis.text.x = element_text(angle = 90, hjust = 1),legend.title = element_blank())+
-  coord_cartesian(ylim = c(0, 4)) +
+  coord_cartesian(ylim = c(0, 3)) +
   xlab("host_response_time")
 ```
-
+### Numeric Variables
 Transform these character variables into numeric variables
 ```{r}
-listings4 <- listings3 %>% mutate(val1 = 1, val2 = 1, val3 = 1, val4 = 1, val5 = 1, val6 = 1)
+listings4 <- listings3 %>% mutate(val1 = 1, val2 = 1, val3 = 1, val4 = 1, val5 = 1)
 listings4 <- listings4 %>% 
   spread(host_response_time, val1, fill = 0) %>% 
   spread(neighbourhood_cleansed, val2, fill = 0) %>% 
   spread(property_type, val3, fill = 0) %>% 
   spread(room_type, val4, fill = 0) %>% 
-  spread(bed_type, val5, fill = 0) %>% 
-  mutate(host_verifications = nchar(gsub('[^,]', '', host_verifications))+1,
-         amenities = nchar(gsub('[^,]', '', amenities))+1) %>% 
-  spread(last_review, val6, fill = 0)
+  spread(bed_type, val5, fill = 0)
 ```
 
-Keep variables with the absolute value of correlation bigger than 0.1.
+List out year variables
 ```{r}
-corr <- as.data.frame(lapply(listings4, function(x)cor(x, listings4$cx_scores))) %>% 
+listings4$host_since <- paste0('host_since_',listings4$host_since,sep='')
+listings4$first_review <- paste0('first_review_',listings4$first_review,sep='')
+listings4$last_review <- paste0('last_review_',listings4$last_review,sep='')
+
+listings4 <- listings4 %>% mutate(val1 = 1, val2 = 1, val3 = 1)
+listings4 <- listings4 %>% 
+  spread(host_since, val1, fill = 0) %>% 
+  spread(first_review, val2, fill = 0) %>% 
+  spread(last_review, val3, fill = 0)
+```
+
+```{r}
+ggplot(listings4, aes(x = host_response_rate)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=0.1)
+```
+```{r}
+ggplot(listings4, aes(x = host_acceptance_rate)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=0.1)
+```
+```{r}
+ggplot(listings4, aes(x = accommodates)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1)
+```
+```{r}
+ggplot(listings4, aes(x = bathrooms)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1)
+```
+```{r}
+ggplot(listings4, aes(x = bedrooms)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1)
+```
+```{r}
+ggplot(listings4, aes(x = beds)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1)
+```
+```{r}
+ggplot(listings4, aes(x = price)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=100)
+```
+```{r}
+ggplot(listings4, aes(x = weekly_price)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1000)
+```
+```{r}
+ggplot(listings4, aes(x = monthly_price)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=5000)
+```
+```{r}
+ggplot(listings4, aes(x = calculated_host_listings_count)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=10)
+```
+```{r}
+ggplot(listings4, aes(x = calculated_host_listings_count_entire_homes)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=5)
+```
+```{r}
+ggplot(listings4, aes(x = calculated_host_listings_count_private_rooms)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=10)
+```
+```{r}
+ggplot(listings4, aes(x = calculated_host_listings_count_shared_rooms)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1)
+```
+
+### Amenities & Host_verifications
+#### nchar
+```{r}
+listings_nchar <- listings4 %>% 
+  mutate(host_verifications = nchar(gsub('[^,]', '', host_verifications))+1,
+         amenities = nchar(gsub('[^,]', '', amenities))+1)
+```
+
+```{r}
+ggplot(listings_nchar, aes(x = host_verifications)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1)
+```
+
+```{r}
+ggplot(listings_nchar, aes(x = amenities)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1)
+```
+
+```{r}
+ggplot(data = listings_nchar, aes(x = host_verifications, y = cx_scores)) +
+  geom_point() +
+  geom_smooth(method = lm)
+```
+
+```{r}
+ggplot(data = listings_nchar, aes(x = amenities, y = cx_scores)) +
+  geom_point() +
+  geom_smooth(method = lm)
+```
+
+Keep variables with the absolute value of correlation bigger than 0.15
+```{r}
+corr_nchar <- as.data.frame(lapply(listings_nchar, function(x)cor(x, listings_nchar$cx_scores))) %>% 
   gather(key = "var", value = "correlation") %>% 
   arrange(desc(abs(correlation))) %>% 
   filter(abs(correlation)>0.15)
+corr_nchar
 ```
 
-## Regression
-Summary statistics
+#### NLP
+Amenities
 ```{r}
-listings_reg <- listings4 %>% 
-  select(cx_scores,`2020`, host_acceptance_rate, `no response`,host_response_rate,
-         host_is_superhost, amenities, `within an hour`, `Yau Tsim Mong`, `Central & Western`,
+amenities <- listings4 %>% unnest_tokens(word, amenities, token = "regex", pattern = "\\,|\\{|\\}")
+frequency_amenities <-  amenities %>% count(word) %>% arrange(desc(n))
+head(frequency_amenities,20)
+```
+Host_verifications
+```{r}
+host_verifications <- listings4 %>% unnest_tokens(word, host_verifications, token = "regex", pattern = "\\,|\\[|\\]|\\'|\\s")
+frequency_host_verifications <-  host_verifications %>% count(word) %>% arrange(desc(n))
+head(frequency_host_verifications,10)
+```
+
+```{r}
+listings_nlp <- listings4 %>% 
+  mutate(air_conditioning = case_when(tolower(amenities) %like% '%air conditioning%' ~ 1, TRUE ~ 0),
+         wifi = case_when(tolower(amenities) %like% '%wifi%' ~ 1, TRUE ~ 0),
+         essentials = case_when(tolower(amenities) %like% '%essentials%' ~ 1, TRUE ~ 0),
+         shampoo = case_when(tolower(amenities) %like% '%shampoo%' ~ 1, TRUE ~ 0),
+         tv = case_when(tolower(amenities) %like% "%tv,%" ~ 1, TRUE ~ 0),
+         hangers = case_when(tolower(amenities) %like% "%hangers%" ~ 1, TRUE ~ 0),
+         hair_dryer = case_when(tolower(amenities) %like% "%hair dryer%" ~ 1, TRUE ~ 0),
+         elevator = case_when(tolower(amenities) %like% "%elevator%" ~ 1, TRUE ~ 0),
+         kitchen = case_when(tolower(amenities) %like% "%kitchen%" ~ 1, TRUE ~ 0),
+         hot_water = case_when(tolower(amenities) %like% "%hot water%" ~ 1, TRUE ~ 0),
+         washer = case_when(tolower(amenities) %like% '%washer%' ~ 1, TRUE ~ 0),
+         laptop_friendly_workspace = case_when(tolower(amenities) %like% '%laptop-friendly workspace%' ~ 1, TRUE ~ 0),
+         family_kid_friendly = case_when(tolower(amenities) %like% '%family/kid friendly%' ~ 1, TRUE ~ 0),
+         iron = case_when(tolower(amenities) %like% '%iron%' ~ 1, TRUE ~ 0),
+         lock_on_bedroom_door = case_when(tolower(amenities) %like% "%lock on bedroom door%" ~ 1, TRUE ~ 0),
+         smoke_alarm = case_when(tolower(amenities) %like% "%smoke alarm%" ~ 1, TRUE ~ 0),
+         fire_extinguisher = case_when(tolower(amenities) %like% "%fire extinguisher%" ~ 1, TRUE ~ 0),
+         refrigerator = case_when(tolower(amenities) %like% "%refrigerator%" ~ 1, TRUE ~ 0),
+         heating = case_when(tolower(amenities) %like% "%heating%" ~ 1, TRUE ~ 0),
+         self_check_in = case_when(tolower(amenities) %like% "%self check-in%" ~ 1, TRUE ~ 0),
+         phone = case_when(tolower(host_verifications) %like% "%'phone'%" ~ 1, TRUE ~ 0),
+         email = case_when(tolower(host_verifications) %like% "%'email'%" ~ 1, TRUE ~ 0),
+         reviews = case_when(tolower(host_verifications) %like% "%'reviews'%" ~ 1, TRUE ~ 0),
+         government_id = case_when(tolower(host_verifications) %like% "%'government_id'%" ~ 1, TRUE ~ 0),
+         jumio = case_when(tolower(host_verifications) %like% "%'jumio'%" ~ 1, TRUE ~ 0),
+         offline_government_id = case_when(tolower(host_verifications) %like% "%'offline_government_id'%" ~ 1, TRUE ~ 0),
+         selfie = case_when(tolower(host_verifications) %like% "%'selfie'%" ~ 1, TRUE ~ 0),
+         identity_manual = case_when(tolower(host_verifications) %like% "%'identity_manual'%" ~ 1, TRUE ~ 0),
+         facebook = case_when(tolower(host_verifications) %like% "%'facebook'%" ~ 1, TRUE ~ 0),
+         work_email = case_when(tolower(host_verifications) %like% "%'work_email'%" ~ 1, TRUE ~ 0)) %>% 
+  dplyr::select(-amenities, -host_verifications)
+```
+
+Keep variables with the absolute value of correlation bigger than 0.15.
+```{r}
+corr_nlp <- as.data.frame(lapply(listings_nlp, function(x)cor(x, listings_nlp$cx_scores))) %>% 
+  gather(key = "var", value = "correlation") %>% 
+  arrange(desc(abs(correlation))) %>% 
+  filter(abs(correlation)>0.15)
+corr_nlp
+```
+
+#### Summary statistics
+```{r}
+listings_reg_nchar <- listings_nchar %>% 
+  dplyr::select(cx_scores,last_review_2020, host_acceptance_rate, host_is_superhost, host_response_rate, 
+         `no response`, `within an hour`, amenities, last_review_2018, `Yau Tsim Mong`, 
+         last_review_2017, `Central & Western`, guests_included) %>% 
+  rename(Central_Western = `Central & Western`,
+         within_an_hour = `within an hour`,
+         Yau_Tsim_Mong = `Yau Tsim Mong`,
+         no_response = `no response`)
+stargazer(listings_reg_nchar,type='html',title = 'Summary Statistics', out = 'summary_statistics_nchar.html')
+```
+
+```{r}
+corrplot(cor(listings_reg_nchar), type = "lower")
+```
+
+```{r}
+listings_reg_nlp <- listings_nlp %>% 
+  dplyr::select(cx_scores,last_review_2020, host_acceptance_rate, host_is_superhost, host_response_rate,
+         `no response`, `within an hour`, self_check_in, hot_water, refrigerator, last_review_2018, 
+         hair_dryer, shampoo, `Yau Tsim Mong`, hangers, last_review_2017, `Central & Western`, 
          guests_included) %>% 
   rename(Central_Western = `Central & Western`,
          within_an_hour = `within an hour`,
          Yau_Tsim_Mong = `Yau Tsim Mong`,
-         no_response = `no response`,
-         last_review_2020 = `2020`)
-stargazer(listings_reg,type='html',title = 'Summary Statistics', out = 'summary_statistics.html')
+         no_response = `no response`)
+stargazer(listings_reg_nlp,type='html',title = 'Summary Statistics', out = 'summary_statistics_nlp.html')
 ```
 
-Normalization
 ```{r}
-listings_reg$amenities <- normalize(listings_reg$amenities)
-listings_reg$guests_included <- normalize(listings_reg$guests_included)
-listings_reg$cx_scores <- normalize(listings_reg$cx_scores, method = "center")
+corrplot(cor(listings_reg_nlp), type = "lower")
 ```
 
-Regression Model
+### Normalization
 ```{r}
-listings_model <- lm(cx_scores~., listings_reg)
-stargazer(listings_model,type='html',title = 'Listings Regression Model', out = 'regression_model.html')
+# nchar
+listings_reg_nchar$amenities <- normalize(listings_reg_nchar$amenities)
+listings_reg_nchar$guests_included <- normalize(listings_reg_nchar$guests_included)
+listings_reg_nchar$host_acceptance_rate <- normalize(listings_reg_nchar$host_acceptance_rate)
+listings_reg_nchar$host_response_rate <- normalize(listings_reg_nchar$host_response_rate)
+listings_reg_nchar$cx_scores <- normalize(listings_reg_nchar$cx_scores, method = "center")
+# nlp
+listings_reg_nlp$guests_included <- normalize(listings_reg_nlp$guests_included)
+listings_reg_nlp$host_acceptance_rate <- normalize(listings_reg_nlp$host_acceptance_rate)
+listings_reg_nlp$host_response_rate <- normalize(listings_reg_nlp$host_response_rate)
+listings_reg_nlp$cx_scores <- normalize(listings_reg_nlp$cx_scores, method = "center")
+```
+
+## Regression
+### Linear Regression
+```{r}
+# nchar
+linear_model_nchar <- lm(cx_scores~., listings_reg_nchar)
+stargazer(linear_model_nchar,type='html',title = 'Linear Regression Model', out = 'linear_regression_model_nchar.html')
+#nlp
+linear_model_nlp <- lm(cx_scores~., listings_reg_nlp)
+stargazer(linear_model_nlp,type='html',title = 'Linear Regression Model', out = 'linear_regression_model_nlp.html')
 ```
 
 RMSE
 ```{r}
-sqrt(mean(listings_model$residuals^2))
+sqrt(mean(linear_model_nchar$residuals^2))
+sqrt(mean(linear_model_nlp$residuals^2))
+```
+We now split the samples into a training set and a test set in order to estimate the test error of linear regression, ridge regression, and the lasso.
+```{r}
+train = listings_reg_nlp %>% sample_frac(0.8)
+test = listings_reg_nlp %>% setdiff(train)
+
+x_train = model.matrix(cx_scores~., train)[,-1]
+x_test = model.matrix(cx_scores~., test)[,-1]
+
+y_train = train %>%
+  dplyr::select(cx_scores) %>%
+  unlist() %>%
+  as.numeric()
+y_test = test %>%
+  dplyr::select(cx_scores) %>%
+  unlist() %>%
+  as.numeric()
+```
+
+RMSE
+```{r}
+linear_train <- lm(cx_scores~., train)
+linear_pred <- predict(linear_train, newx = x_test)
+sqrt(mean((linear_pred - y_test)^2))
+```
+
+### Ridge Regression
+```{r}
+# outcome
+y <- listings_reg_nlp$cx_scores
+
+# Predictors as matrix 
+x <- listings_reg_nlp %>% dplyr::select(-cx_scores) %>% data.matrix()
+
+# Set up the hyperparameter, lambda - this is the strength of the penalty for each residual 
+lambdas <- 10^seq(3, -2, by = -.1)
+
+# Find optimal lambda using cross-validation - running the model many times for different values of lambda
+cv_ridge_model <- cv.glmnet(x, y, alpha = 0, lambda = lambdas)
+plot(cv_ridge_model)
+```
+
+So we now have the optimal lambda for our value. We can extract this value to work with it:
+```{r}
+opt_lambda <- cv_ridge_model$lambda.min
+opt_lambda
+```
+
+Now we have our trained models as below:
+```{r}
+ridge_model <- cv_ridge_model$glmnet.fit
+summary(ridge_model)
+```
+
+We can also visualize the coefficients as below, where each curve is a variable
+```{r}
+plot(ridge_model, label = TRUE)
+```
+
+And we can see how good the training model is: 
+```{r}
+ridge_y_pred <- predict(ridge_model, s = opt_lambda, newx = x)
+
+# Sum of Squares Total and Error
+sst <- sum((y - mean(y))^2)
+sse <- sum((ridge_y_pred - y)^2)
+
+# R squared
+rsq <- 1 - sse / sst
+rsq
+```
+
+RMSE
+```{r}
+ridge_train <- glmnet(x_train, y_train, alpha=0, lambda = lambdas)
+ridge_pred <- predict(ridge_train, s = opt_lambda, newx = x_test)
+sqrt(mean((ridge_pred - y_test)^2))
+```
+
+## Lasso Regression
+```{r}
+lasso_model <- glmnet(x, y, alpha = 1, lambda = lambdas)
+plot(lasso_model, label = TRUE)    # Draw plot of coefficients
+```
+
+Notice that in the coefficient plot that depending on the choice of tuning parameter, some of the coefficients are exactly equal to zero. We now perform cross-validation and compute the associated test error:
+```{r}
+cv_lasso_model <- cv.glmnet(x, y, alpha = 1) # Fit lasso model on training data
+plot(cv_lasso_model) # Draw plot of training MSE as a function of lambda
+```
+
+And we can see how good the training model is: 
+```{r}
+opt_lambda <- cv_lasso_model$lambda.min
+lasso_y_pred <- predict(lasso_model, s = opt_lambda, newx = x)
+
+# Sum of Squares Total and Error
+sst <- sum((y - mean(y))^2)
+sse <- sum((lasso_y_pred - y)^2)
+
+# R squared
+rsq <- 1 - sse / sst
+rsq
+```
+
+RMSE
+```{r}
+lasso_train <- glmnet(x_train, y_train, alpha=1, lambda = lambdas)
+lasso_pred <- predict(lasso_model, s = opt_lambda, newx = x_test) # Use best lambda to predict test data
+sqrt(mean((lasso_pred - y_test)^2))
+```
+
+### Random Forest
+```{r}
+oob.err=double(13)
+test.err=double(13)
+#mtry is the number of variables randomly chosen at each split
+for(mtry in 1:13) 
+{
+  rf=randomForest(cx_scores ~ . , data = train,mtry=mtry,ntree=400) 
+  oob.err[mtry] = rf$mse[400] #Error of all Trees fitted
+  
+  pred<-predict(rf,test) #Predictions on Test Set for each Tree
+  test.err[mtry]= with(test, mean((cx_scores - pred)^2)) #Mean Squared Test Error
+  
+  cat(mtry," ") #printing the output to the console
+}
+```
+```{r}
+matplot(1:mtry, cbind(oob.err,test.err), pch=19, col=c("red","blue"), type="b", ylab="Mean Squared Error", xlab="Number of Predictors Considered at each Split")
+legend("topright", legend=c("Out of Bag Error","Test Error"), pch=19, col=c("red","blue"))
+```
+
+```{r}
+rf_model <- randomForest(cx_scores ~ . , data = train, mtry = 5, ntree=400)
+rf_model
+```
+```{r}
+plot(rf_model)
+```
+
+RMSE
+```{r}
+rf_pred <- predict(rf_model,test)
+sqrt(mean((rf_pred - y_test)^2))
 ```
