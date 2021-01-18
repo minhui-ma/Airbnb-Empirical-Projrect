@@ -1,1 +1,3 @@
-# Airbnb-Empirical-Projrect
+# Airbnb Review Scores Rating Exploration and Prediction: Empirical Evidence from Hong Kong
+## Abstract
+Inspired by the business success of Airbnb and the developed tourism industry in Hong Kong, in this paper, we will explore the determinants of the Airbnb customer experience in Hong Kong and aim to improve the performance of Airbnb hosts in Hong Kong. On the Airbnb website, listings are evaluated through six dimensions – accuracy, communication, cleanliness, check-in, location, and value. The empirical project will firstly analyze the order of importance of these six dimensions. Besides, using the dataset sourced from Inside Airbnb, we will investigate which features are crucial for customer satisfaction. Lastly, we will build customer experience models to predict the quality of listings.
