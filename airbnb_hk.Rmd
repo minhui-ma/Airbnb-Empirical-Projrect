@@ -161,24 +161,7 @@ for (i in var){
   eval(parse(text= text))
 }
 ```
-  
-* Drop variables: ```summary```,  ```space```, ```description```, ```neighborhood_overview```, ```notes```, ```transit```, ```access```, ```interaction```, ```house_rules```, ```license```, ```host_about```, ```cancellation_policy```, ```host_about```, ```cancellation_policy```
-* Drop variable ```is_location_exact```: unimportant as it could be inacurate up to 150 meters http://insideairbnb.com/about.html#disclaimers
-* Drop variable ```calendar_updated```: we are not interested in future data that is a subject to daily updates
-```{r}
-listings2 <- listings2 %>% 
-  dplyr::select(-summary, -space, -description, -neighborhood_overview, -notes, -transit, -access, -interaction, -house_rules, -license, -host_about, -cancellation_policy, -is_location_exact, -calendar_updated)
-```
-  
-* Replace missing values with 0: ```bathrooms```,  ```beds``` 
-```{r}
-var0 <- c('bathrooms','beds','bedrooms')
-for (i in var0){
-  text <- paste("listings2$",i,"[is.na(listings2$",i,")] <- 0",sep='')
-  eval(parse(text= text))
-}
-```
-  
+ 
 * Replace missing values with mean values: ```host_since```, ```security_deposit```, ```cleaning_fee```
 ```{r}
 listings2$host_since[is.na(listings2$host_since)] <- floor(mean(listings2$host_since[!is.na(listings2$host_since)]))
@@ -191,6 +174,29 @@ listings2$cleaning_fee[is.na(listings2$cleaning_fee)] <- floor(mean(listings2$cl
 listings2$weekly_price[is.na(listings2$weekly_price)] <- 7*listings2$price[is.na(listings2$weekly_price)]
 listings2$monthly_price[is.na(listings2$monthly_price)] <- 30*listings2$price[is.na(listings2$monthly_price)]
 listings2$host_response_time[is.na(listings2$host_response_time)] <- 'no response'
+```
+  
+* Drop variables: ```summary```,  ```space```, ```description```, ```neighborhood_overview```, ```notes```, ```transit```, ```access```, ```interaction```, ```house_rules```, ```license```, ```host_about```, ```cancellation_policy```, ```host_about```, ```cancellation_policy```
+* Drop variable ```is_location_exact```: unimportant as it could be inacurate up to 150 meters http://insideairbnb.com/about.html#disclaimers
+* Drop variable ```calendar_updated```: we are not interested in future data that is a subject to daily updates
+* Drop variable ```first_review``` and ```last_review```: we are not interested about when the reviews are given
+* Add variable ```last_first_review```: we are interested about how many years the listing has been on Airbnb. Simply calculate it by ```first_review```-```last_review```
+* Convert ```host_since``` into the years of experience of being a host
+```{r}
+listings2 <- listings2 %>% 
+  dplyr::select(-summary, -space, -description, -neighborhood_overview, -notes, -transit, -access, -interaction, -house_rules, -license, -host_about, -cancellation_policy, -is_location_exact, -calendar_updated) %>% 
+  mutate(last_first_review = first_review-last_review,
+         host_experience_year = floor(2020-host_since)) %>% 
+  dplyr::select(-first_review,-last_review,-host_since)
+```
+  
+* Replace missing values with 0: ```bathrooms```,  ```beds``` 
+```{r}
+var0 <- c('bathrooms','beds','bedrooms')
+for (i in var0){
+  text <- paste("listings2$",i,"[is.na(listings2$",i,")] <- 0",sep='')
+  eval(parse(text= text))
+}
 ```
   
 * Remove observations with 0 review
@@ -244,9 +250,9 @@ listings2 <- listings2 %>%
 
 #### 3.3. Year
 ```{r}
-paste("The earliest year of host_since is ",min(listings2$host_since),", and the lastest year of host_since is ",max(listings2$host_since),sep='')
-paste("The earliest year of first_review is ",min(listings2$first_review),", and the lastest year of first_review is ",max(listings2$first_review),sep='')
-paste("The earliest year of last_review is ",min(listings2$last_review),", and the lastest year of last_review is ",max(listings2$last_review),sep='')
+paste("The earliest year of host_since is ",min(listings$host_since),", and the lastest year of host_since is ",max(listings$host_since),sep='')
+paste("The earliest year of first_review is ",min(listings$first_review),", and the lastest year of first_review is ",max(listings$first_review),sep='')
+paste("The earliest year of last_review is ",min(listings$last_review),", and the lastest year of last_review is ",max(listings$last_review),sep='')
 ```
 
 #### 3.4. Scores correlation matrix
@@ -415,24 +421,18 @@ listings4 <- listings4 %>%
   spread(property_type, val3, fill = 0) %>% 
   spread(room_type, val4, fill = 0)
 
-listings4$host_since <- paste0('host_since_',listings4$host_since,sep='')
-listings4$first_review <- paste0('first_review_',listings4$first_review,sep='')
-listings4$last_review <- paste0('last_review_',listings4$last_review,sep='')
-
-listings4 <- listings4 %>% mutate(val1 = 1, val2 = 1, val3 = 1)
-listings4 <- listings4 %>% 
-  spread(host_since, val1, fill = 0) %>% 
-  spread(first_review, val2, fill = 0) %>% 
-  spread(last_review, val3, fill = 0) %>% 
-  dplyr::select(-id)
+listings4 <- listings4 %>% dplyr::select(-id)
 
 names(listings4) <- gsub(" ", "_", names(listings4))
+names(listings4) <- gsub("&", "", names(listings4))
+names(listings4) <- gsub("/", "_", names(listings4))
+names(listings4) <- gsub("__", "_", names(listings4))
 ```
   
 * host_response_rate
 ```{r}
-ggplot(listings4 %>% count(host_response_rate), aes(x = host_response_rate, y = n)) + 
-  geom_line()
+ggplot(listings4 %>% count(host_response_rate), aes(x = host_response_rate)) + 
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=0.1)
 ```
   
 * host_acceptance_rate
@@ -468,19 +468,19 @@ ggplot(listings4, aes(x = beds)) +
 * price
 ```{r}
 ggplot(listings4, aes(x = price)) + 
-  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=100)
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=1000)
 ```
   
 * weekly_price
 ```{r}
 ggplot(listings4, aes(x = weekly_price)) + 
-  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=5000)
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=10000)
 ```
   
 * monthly_price
 ```{r}
 ggplot(listings4, aes(x = monthly_price)) + 
-  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=10000)
+  geom_histogram(fill="black", colour="black", alpha = 0.25, binwidth=100000)
 ```
   
 * calculated_host_listings_count
@@ -540,14 +540,12 @@ ggplot(data = listings_nchar, aes(x = amenities, y = cx_scores)) +
   geom_smooth(method = lm)
 ```
   
-* Dimensionality reduction
-  
-Keep variables with the absolute value of correlation bigger than 0
+* Correlation
 ```{r}
 corr_nchar <- as.data.frame(lapply(listings_nchar, function(x)cor(x, listings_nchar$cx_scores))) %>%
   gather(key = "var", value = "correlation") %>%
   arrange(desc(abs(correlation))) %>%
-  filter(correlation > 0)
+  filter(abs(correlation) > 0)
 corr_nchar
 ```
 
@@ -603,61 +601,80 @@ listings_nlp <- listings4 %>%
   dplyr::select(-amenities, -host_verifications)
 
 names(listings_nlp) <- gsub(" ", "_", names(listings_nlp))
+names(listings_nlp) <- gsub("&", "", names(listings_nlp))
 ```
   
-* Dimensionality reduction
-  
-Keep variables with the absolute value of correlation bigger than 0.
+* Correlation
 ```{r}
 corr_nlp <- as.data.frame(lapply(listings_nlp, function(x)cor(x, listings_nlp$cx_scores))) %>%
   gather(key = "var", value = "correlation") %>%
   arrange(desc(abs(correlation))) %>%
-  filter(correlation > 0)
+  filter(abs(correlation) > 0)
 corr_nlp
 ```
 
 ### 4. Summary Statistics
-  
-Drop variables with low t-statistics
-  
-#### 4.1. Transform ```amenities``` & ```host_verifications``` by counting
-```{r,results = 'hide',message=FALSE}
-var_nchar <- dput(corr_nchar$var)
-listings_nchar <- listings_nchar[,var_nchar]
-# Linear Regression Model
-fit_nchar <- lm(cx_scores~., listings_nchar)
-stargazer(fit_nchar,type='html',title = 'Linear Regression Model', out = 'fit_nchar.html')
+#### 4.1. Normalization
+```{r}
+numeric_var_nchar <- c("host_response_rate","host_acceptance_rate","accommodates","bathrooms","bedrooms","beds","price","weekly_price","monthly_price","security_deposit","cleaning_fee","guests_included","extra_people","minimum_nights","maximum_nights","minimum_minimum_nights","maximum_minimum_nights","minimum_maximum_nights","maximum_maximum_nights","minimum_nights_avg_ntm","maximum_nights_avg_ntm","calculated_host_listings_count","calculated_host_listings_count_entire_homes","calculated_host_listings_count_private_rooms","calculated_host_listings_count_shared_rooms","amenities","host_verifications","last_first_review")
+for (var in numeric_var_nchar){
+    text <- paste("listings_nchar$",var," <- normalize(listings_nchar$",var,",method='standardize')" ,sep='')
+  eval(parse(text= text))
+}
+listings_nchar$cx_scores <- normalize(listings_nchar$cx_scores,method='center')
 ```
 ```{r}
+numeric_var_nlp <- c("host_response_rate","host_acceptance_rate","accommodates","bathrooms","bedrooms","beds","price","weekly_price","monthly_price","security_deposit","cleaning_fee","guests_included","extra_people","minimum_nights","maximum_nights","minimum_minimum_nights","maximum_minimum_nights","minimum_maximum_nights","maximum_maximum_nights","minimum_nights_avg_ntm","maximum_nights_avg_ntm","calculated_host_listings_count","calculated_host_listings_count_entire_homes","calculated_host_listings_count_private_rooms","calculated_host_listings_count_shared_rooms","last_first_review")
+for (var in numeric_var_nlp){
+    text <- paste("listings_nlp$",var," <- normalize(listings_nlp$",var,",method='standardize')" ,sep='')
+  eval(parse(text= text))
+}
+listings_nlp$cx_scores <- normalize(listings_nlp$cx_scores,method='center')
+```
+  
+The next step is to drop insignificant variables from the regression models.
+
+#### 4.2. Transform by counting
+```{r}
+# Remove insignificant variables
+fit_nchar_ini <- lm(cx_scores~., listings_nchar)
+sig_nchar <- summary(fit_nchar_ini)$coeff[-1,4] < 0.05
+sig_nchar <- names(sig_nchar)[sig_nchar == TRUE] 
+sig_formula_nchar <- as.formula(paste("cx_scores ~",paste(sig_nchar, collapse= "+")))
+# Linear Regression Model
+fit_nchar <- lm(sig_formula_nchar, listings_nchar)
 summary(fit_nchar)
 ```
+  
+Further reduce dimensionality by removing insignificant variables
 ```{r,results = 'hide',message=FALSE}
 # Summary Statistics
-listings_reg_nchar <- listings_nchar %>% 
-  dplyr::select(-host_response_rate,-within_an_hour,-accommodates,-accommodates,-beds,-within_a_few_hours,-within_a_few_hours,-Hotel,-host_since_2018,-host_since_2019,-Condominium,-host_since_2010,-Hotel_room,-bedrooms,-North,-host_since_2015,-host_has_profile_pic,-Boutique_hotel,-host_since_2017,-Wong_Tai_Sin,-host_since_2011,-other_property_types,-House,-Serviced_apartment,-within_a_day,-Tuen_Mun,-host_since_2012,-cleaning_fee,-Tai_Po,-Shared_room,-Private_room,-extra_people)
+listings_reg_nchar <- listings_nchar[,append("cx_scores",sig_nchar)] %>% 
+  dplyr::select(-minimum_minimum_nights,-Kowloon_City,-North,-Sha_Tin,-Southern,-Condominium,-Hotel_room)
 stargazer(listings_reg_nchar,type='html',title = 'Summary Statistics',nobs = FALSE,out = 'summary_statistics_nchar.html')
 ```
 ```{r}
 summary(listings_reg_nchar)
 ```
 
-#### 4.2. Transform ```amenities``` & ```host_verifications``` using nlp
-```{r,results = 'hide',message=FALSE}
-var_nlp <- dput(corr_nlp$var)
-listings_nlp <- listings_nlp[,var_nlp]
-
-# Linear Regression Model
-fit_nlp <- lm(cx_scores~., listings_nlp)
-stargazer(fit_nlp,type='html',title = 'Linear Regression Model', out = 'fit_nlp.html')
-```
+#### 4.3. Transform using nlp
 ```{r}
+# Remove insignificant variables
+fit_nlp_ini <- lm(cx_scores~., listings_nlp)
+sig_nlp <- summary(fit_nlp_ini)$coeff[-1,4] < 0.05
+sig_nlp <- names(sig_nlp)[sig_nlp == TRUE] 
+sig_formula_nlp <- as.formula(paste("cx_scores ~",paste(sig_nlp, collapse= "+")))
+# Linear Regression Model
+fit_nlp <- lm(sig_formula_nlp, listings_nlp)
 summary(fit_nlp)
 ```
+  
+Further reduce dimensionality by removing insignificant variables
 ```{r,results = 'hide',message=FALSE}
 # Summary Statistics
-listings_reg_nlp <- listings_nlp %>% 
-  dplyr::select(-host_response_rate,-within_an_hour,-hair_dryer,-smoke_alarm,-accommodates,-tv,-selfie,-identity_manual,-beds,-laptop_friendly_workspace,-iron,-within_a_few_hours,-jumio,-Hotel,-host_since_2018,-host_since_2019,-government_id,-Condominium,-extra_people,-host_since_2010,-Hotel_room,-bedrooms,-North,-phone,-host_since_2015,-host_has_profile_pic,-heating,-Boutique_hotel,-host_since_2017,-email,-Wong_Tai_Sin,-host_since_2011,-other_property_types,-House,-host_identity_verified,-Serviced_apartment,-within_a_day,-air_conditioning,-offline_government_id,-host_since_2012,-cleaning_fee,-Kwun_Tong,-Tuen_Mun)
-stargazer(listings_reg_nlp,type='html',title = 'Summary Statistics',nobs = FALSE,out = 'summary_statistics_nLP.html')
+listings_reg_nlp <- listings_nlp[,append("cx_scores",sig_nlp)] %>% 
+  dplyr::select(-Central_Western,-North,-Sha_Tin,-Southern,-offline_government_id)
+stargazer(listings_reg_nlp,type='html',title = 'Summary Statistics',nobs = FALSE,out = 'summary_statistics_nlp.html')
 ```
 ```{r}
 summary(listings_reg_nlp)
@@ -779,11 +796,14 @@ cv_lasso_model <- cv.glmnet(x, y, alpha = 1) # Fit lasso model on training data
 plot(cv_lasso_model) # Draw plot of training MSE as a function of lambda
 ```
   
-And we can see how good the training model is: 
+The optimal lambda is: 
 ```{r}
 opt_lambda <- cv_lasso_model$lambda.min
 lasso_y_pred <- predict(lasso_model, s = opt_lambda, newx = x)
-
+opt_lambda
+```
+And we can see how good the training model is: 
+```{r}
 # Sum of Squares Total and Error
 sst <- sum((y - mean(y))^2)
 sse <- sum((lasso_y_pred - y)^2)
@@ -821,9 +841,9 @@ matplot(1:mtry, cbind(oob.err,test.err), pch=19, col=c("red","blue"), type="b", 
 legend("topright", legend=c("Out of Bag Error","Test Error"), pch=19, col=c("red","blue"))
 ```
   
-Test error is the smallest when mtry = 7. Let ntree = 400
+Test error is the smallest when mtry = 7. Let ntree = 300
 ```{r}
-rf_model <- randomForest(cx_scores ~ . , data = train, mtry = 7, ntree=400)
+rf_model <- randomForest(cx_scores ~ . , data = train, mtry = 7, ntree=300)
 rf_model
 ```
 ```{r}
